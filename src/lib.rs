@@ -26,6 +26,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::sleep;
 use log::{info, error};
+use std::fs::File;
+use std::io::Write;
 
 /// Trait for basic scraping operations. 
 /// This allows us to extend scraping functionality easily in the future.
@@ -111,7 +113,7 @@ impl RustScrapper {
 impl Scraper for RustScrapper {
     /// Scrape synchronously.
     /// It fetches the page content and parses the HTML using the provided CSS selector.
-    fn scrape(&self, url: &str, element: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    fn scrape(&mut self, url: &str, element: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         if let Some(cached_data) = self.cache.get(url) {
             info!("Cache hit for URL: {}", url);
             return Ok(cached_data.clone());
@@ -119,7 +121,7 @@ impl Scraper for RustScrapper {
 
         let body = reqwest::blocking::get(url)?.text()?;
         let document = Html::parse_document(&body);
-        let selector = Selector::parse(element)?;
+        let selector = Selector::parse(element).map_err(|e| format!("Selector parse error: {:?}", e))?;
 
         let results = document
             .select(&selector)
@@ -132,7 +134,7 @@ impl Scraper for RustScrapper {
 
     /// Scrape asynchronously.
     /// It asynchronously fetches the page content and parses the HTML using the provided CSS selector.
-    async fn scrape_async(&self, url: &str, element: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    async fn scrape_async(&mut self, url: &str, element: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         if let Some(cached_data) = self.cache.get(url) {
             info!("Cache hit for URL: {}", url);
             return Ok(cached_data.clone());
@@ -140,7 +142,7 @@ impl Scraper for RustScrapper {
 
         let response = self.client.get(url).send().await?.text().await?;
         let document = Html::parse_document(&response);
-        let selector = Selector::parse(element)?;
+        let selector = Selector::parse(element).map_err(|e| format!("Selector parse error: {:?}", e))?;
 
         let results = document
             .select(&selector)
@@ -150,7 +152,7 @@ impl Scraper for RustScrapper {
         self.cache.set(url, results.clone());
         Ok(results)
     }
-}
+
 
 /// Handles exporting scraped data to different formats.
 pub struct Exporter;
@@ -181,8 +183,11 @@ impl JsScraper {
         let tab = browser.wait_for_initial_tab()?;
 
         tab.navigate_to(url)?.wait_until_navigated()?;
-        let body = tab.find_element(element)?.get_inner_html()?;
-
+        let body = tab.find_element(element)?
+                      .call_js_fn("function() { return this.innerHTML; }", vec![])?
+                      .value
+                      .unwrap_or_default()
+                      .to_string();
         Ok(vec![body])
     }
 }
